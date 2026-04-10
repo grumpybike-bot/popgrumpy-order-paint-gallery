@@ -1,0 +1,58 @@
+name: Update Gallery
+
+on:
+  schedule:
+    # 毎週月曜・木曜 午前9時（JST = UTC+9 → UTC 0時）に実行
+    - cron: '0 0 * * 1,4'
+  workflow_dispatch:   # 手動実行も可能
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # index.html / posts.json をコミットするため
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Fetch new posts from Instagram
+        id: fetch
+        env:
+          INSTAGRAM_SESSION_ID: ${{ secrets.INSTAGRAM_SESSION_ID }}
+        run: |
+          python3 fetch_new_posts.py
+          echo "exit_code=$?" >> $GITHUB_OUTPUT
+        # exit code 1 = 新規投稿あり（正常）なので continue-on-error を使う
+        continue-on-error: true
+
+      - name: Check if there are changes
+        id: changes
+        run: |
+          if git diff --quiet; then
+            echo "changed=false" >> $GITHUB_OUTPUT
+          else
+            echo "changed=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Commit and push updates
+        if: steps.changes.outputs.changed == 'true'
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add posts.json index.html
+          COUNT=$(python3 -c "
+          import json
+          d = json.load(open('posts.json'))
+          print(sum(len(v) for v in d['posts_by_category'].values()))
+          ")
+          git commit -m "🎨 ギャラリー自動更新 (${COUNT}件) [skip ci]"
+          git push
